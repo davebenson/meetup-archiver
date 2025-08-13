@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "dependencies": {
+    "daveb-option-parser": "^0.0.1",
+    "meetup-api-client": "^0.1.5"
+  }
+}
