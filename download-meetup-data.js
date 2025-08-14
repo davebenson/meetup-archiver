@@ -444,7 +444,7 @@ async function downloadFile(url, filepath) {
     });
 }
 
-async function downloadMeetupEventData(eventId) {
+async function downloadMeetupEventData(eventId, baseDir) {
     try {
         const eventQuery = `
             query($eventId: ID!) {
@@ -513,7 +513,7 @@ async function downloadMeetupEventData(eventId) {
         const legacyPhotos = await fetchPhotosFromLegacyAPI(eventId);
         
         const dirName = formatEventDirectoryName(event.dateTime, event.title);
-        const outputDir = path.join(__dirname, 'downloads', dirName);
+        const outputDir = path.join(baseDir, dirName);
         if (!fs.existsSync(outputDir)) {
             fs.mkdirSync(outputDir, { recursive: true });
         }
@@ -547,13 +547,8 @@ async function downloadMeetupEventData(eventId) {
             path.join(outputDir, 'event-data.json'),
             JSON.stringify(eventData, null, 2)
         );
-        fs.writeFileSync(
-            path.join(outputDir, 'ID'),
-            eventId
-        );
         if (verbose) {
             console.log(`Event data saved to ${outputDir}/event-data.json`);
-            console.log(`Event ID saved to ${outputDir}/ID`);
         }
 
 	const photosDir = path.join(outputDir, 'photos');
@@ -561,7 +556,7 @@ async function downloadMeetupEventData(eventId) {
 	    fs.mkdirSync(photosDir, { recursive: true });
 	}
 
-	console.log(`Downloading ${eventData.photos.length} photos...`);
+	console.log(`Downloading ${eventData.photos.length} photos... [${outputDir}]`);
 	let seq = 0;
 	for (const photo of eventData.photos) {
 	    seq++;
@@ -584,7 +579,7 @@ async function downloadMeetupEventData(eventId) {
 	    }
 	}
 	if (!verbose)
-            process.stdout.write(`\rfinished downloading ${eventData.photos.length} photos`);
+            process.stdout.write(`\rfinished downloading ${eventData.photos.length} photos!\n`);
 
         // Generate HTML file
         const htmlContent = generateEventHTML(eventData);
@@ -603,8 +598,13 @@ async function downloadMeetupEventData(eventId) {
 	    console.log(`Photos: ${eventData.photos.length}`);
 	    console.log(`Output directory: ${outputDir}`);
 	} else {
-	    console.log(`${outputDir}: ${event.title} (${eventData.photos.length} images`);
+	    console.log(`${outputDir}: ${event.title} (${eventData.photos.length} images)`);
 	}
+
+        fs.writeFileSync(
+            path.join(outputDir, 'ID'),
+            eventId
+        );
 
         return eventData;
 
@@ -617,6 +617,9 @@ async function downloadMeetupEventData(eventId) {
 async function downloadMeetupGroupData(groupId) {
    const eventIds = [];
    let cursor;
+    if (!fs.existsSync(groupId)) {
+        fs.mkdirSync(groupId, { recursive: true });
+    }
    for (;;) {
 	const after = cursor ? `after: "${cursor}"` : '';
         const query = `
@@ -647,11 +650,28 @@ async function downloadMeetupGroupData(groupId) {
 	}
 	cursor = group.events.pageInfo.endCursor;
    }
-   console.log(eventIds);
+   //console.log(eventIds);
    fs.writeFileSync(
-	   `${groupId}.events`,
+	   `${groupId}/events`,
 	   eventIds.join("\n") + "\n"
    );
+
+   // scan all groupId/*/ID files to find completed events
+   // to skip.
+   const ids_completed = {};
+   for (let dir in readdir(groupId)) {
+      try {
+          const id = fs.readFileSync(path.join(groupId, dir, 'ID'), 'utf-8').strip();
+	  ids_completed[id] = true;
+      } catch (err) {
+      }
+   }
+
+   for (const eventId of eventIds) {
+       if (!(eventId in ids_completed)) {
+           await downloadMeetupEventData(eventId, groupId);
+       }
+   }
 } 
 
 async function scanEvents() {
@@ -856,7 +876,7 @@ async function generateMainIndex(events) {
         }
         .event-row {
             display: grid;
-            grid-template-columns: 140px 1fr auto auto auto;
+            grid-template-columns: 140px 1fr auto auto;
             gap: 20px;
             padding: 16px 20px;
             border-bottom: 1px solid #e0e0e0;
@@ -906,15 +926,6 @@ async function generateMainIndex(events) {
             text-align: center;
             white-space: nowrap;
         }
-        .event-venue {
-            color: #888;
-            font-size: 0.85em;
-            text-align: right;
-            max-width: 200px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
         .navigation {
             position: sticky;
             top: 20px;
@@ -950,10 +961,6 @@ async function generateMainIndex(events) {
             }
             .event-rsvps, .event-photos {
                 text-align: left;
-            }
-            .event-venue {
-                text-align: left;
-                max-width: none;
             }
             .stats {
                 grid-template-columns: repeat(2, 1fr);
@@ -1011,7 +1018,6 @@ async function generateMainIndex(events) {
                 </div>
                 <div class="event-rsvps">👥 ${event.rsvpCount}</div>
                 <div class="event-photos">📸 ${event.photoCount}</div>
-                <div class="event-venue">${event.venue ? event.venue.name : ''}</div>
             </div>
             `).join('')}
         </div>
@@ -1254,7 +1260,7 @@ async function generateAttendeePages(attendeesMap, attendeesDir) {
 switch (process.argv[2]) {
   case 'event':
     const eventId = process.argv[3];
-    await downloadMeetupEventData(eventId);
+    await downloadMeetupEventData(eventId, 'downloads');
     console.log('Download completed successfully!');
     break;
   case 'group':
